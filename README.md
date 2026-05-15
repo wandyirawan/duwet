@@ -27,7 +27,7 @@ Terminal-based warehouse management for Salad Buah ERP. Keyboard-driven, runs on
 ## How It Works
 
 ```
-Duwet TUI ──Login──→ Mangosteen (:4000) → JWT token
+Duwet TUI ──Login──→ Salak (:8000) POST /auth/login → Mangosteen
     │
     ├─ Stock In ──→ Salak (:8000) POST /stock-in
     ├─ Stock Out ─→ Salak (:8000) POST /stock-out
@@ -74,7 +74,6 @@ cd ~/duwet
 
 ```env
 SALAK_URL=http://192.168.1.10:8000
-MANGOSTEEN_URL=http://192.168.1.10:4000
 ```
 
 ## Navigation

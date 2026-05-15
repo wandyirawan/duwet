@@ -17,10 +17,6 @@ fn salak_url() -> String {
     std::env::var("SALAK_URL").unwrap_or_else(|_| "http://localhost:8000".into())
 }
 
-fn mangosteen_url() -> String {
-    std::env::var("MANGOSTEEN_URL").unwrap_or_else(|_| "http://localhost:4000".into())
-}
-
 #[derive(Debug, Clone)]
 struct App {
     // Auth
@@ -226,7 +222,7 @@ fn handle_login_key(app: &mut App, key: KeyCode) {
 async fn login(_email: &str, _password: &str) -> Result<String, String> {
     let client = reqwest::Client::new();
     let res = client
-        .post(format!("{}/api/auth/login", mangosteen_url()))
+        .post(format!("{}/auth/login", salak_url()))
         .json(&serde_json::json!({
             "email": _email,
             "password": _password,
