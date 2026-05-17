@@ -4,7 +4,7 @@ Terminal-based warehouse management for Salad Buah ERP. Keyboard-driven, runs on
 
 ```
 ┌─ Duwet ───────────────────────────────────────────┐
-| Stock In [0] | Stock Out [1] | Check [2] | Transactions [3]
+| Stock In [0] | Stock Out [1] | Check [2] | Transactions [3] | Categories [4]
 │────────────────────────────────────────────────────│
 │ ┌─ SKU ────────┐  ┌─ Quantity ──┐  ┌─ Warehouse ┐ │
 │ │ PRD-001      │  │ 10          │  │ 1          │ │
@@ -32,7 +32,8 @@ Duwet TUI ──Login──→ Salak (:8000) POST /auth/login → Mangosteen
     ├─ Stock In ──→ Salak (:8000) POST /stock-in
     ├─ Stock Out ─→ Salak (:8000) POST /stock-out
     ├─ Check ────→ Salak (:8000) GET /inventory?sku=X
-    └─ Transactions → Salak (:8000) GET /inventory/transactions
+    ├─ Transactions → Salak (:8000) GET /inventory/transactions
+    └─ Categories ─→ Salak (:8000) GET/POST/PUT/DELETE /categories
 ```
 
 ## Quick Start
@@ -85,8 +86,10 @@ SALAK_URL=http://192.168.1.10:8000
 | `Shift+Tab` | Previous field |
 | `Enter` | Submit / Fetch |
 | `Esc` | Clear / Normal mode |
-| `1/2/3/4` | Switch tab |
-| `↑/↓` | Scroll table (Transactions) |
+| `1/2/3/4/5` | Switch tab |
+| `↑/↓` | Scroll table |
+| `n` | New item (Categories) |
+| `d` | Delete (Categories) |
 | Type | Input text |
 
 ## Tabs
@@ -109,6 +112,12 @@ SALAK_URL=http://192.168.1.10:8000
 - GET Salak `/inventory/transactions?limit=50`
 - Table: Time | SKU | Delta (color-coded) | Reference | Warehouse
 - `↑/↓` to scroll, Enter to refresh
+
+### Categories (5)
+- Full CRUD: Create, Read, Update, Delete via Salak `/categories`
+- Table: ID | Name | Slug
+- `n` → new, Enter → edit, `d` → delete with confirm dialog
+- Slug auto-generated from name on backend
 
 ## License
 

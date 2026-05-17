@@ -10,7 +10,7 @@ All Salak endpoints accessible from Duwet TUI. Full CRUD for warehouse operators
 [1] Stock Out    — POST /stock-out             ✅ done
 [2] Check        — GET /inventory?sku=X        ✅ done
 [3] Products     — GET /products (table)        🆕
-[4] Categories   — GET /categories (table)      🆕
+[4] Categories   — GET /categories (table)      ✅ done ✅
 [5] Warehouses   — GET /warehouses (table)      🆕
 [6] Transactions — GET /inventory/transactions  ✅ done ✅
 ```
@@ -24,11 +24,12 @@ All Salak endpoints accessible from Duwet TUI. Full CRUD for warehouse operators
 - Enter on row → detail view → Edit (PUT /products/{id})
 - `n` key → New product form (POST /products)
 
-### [4] Categories — Table + CRUD
+### [4] Categories — Table + CRUD ✅ done
 - GET /categories → scrollable table: ID | Name | Slug
 - `n` → new category form
 - Enter → edit
 - `d` → delete confirm dialog
+- Auto slug generation on backend
 
 ### [5] Warehouses — Table + CRUD
 - GET /warehouses → table: ID | Name | Location

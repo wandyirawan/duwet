@@ -57,6 +57,14 @@ struct App {
     txn_rows: Vec<TransactionRow>,
     txn_scroll: usize,
     txn_status: String,
+
+    // Categories
+    cat_rows: Vec<CategoryRow>,
+    cat_scroll: usize,
+    cat_status: String,
+    cat_mode: CategoryMode,
+    cat_name: String,
+    cat_selected: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +111,22 @@ struct TransactionRow {
     sku: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
+struct CategoryRow {
+    id: i32,
+    name: String,
+    slug: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum CategoryMode {
+    Browse,
+    Create,
+    Edit(i32),
+    DeleteConfirm(i32, String),
+}
+
 impl App {
     fn new() -> Self {
         Self {
@@ -111,7 +135,7 @@ impl App {
             login_password: String::new(),
             login_error: String::new(),
             login_focus: LoginFocus::Email,
-            tabs: vec!["Stock In", "Stock Out", "Check", "Transactions"],
+            tabs: vec!["Stock In", "Stock Out", "Check", "Transactions", "Categories"],
             active_tab: 0,
             si_sku: String::new(),
             si_qty: String::new(),
@@ -131,6 +155,12 @@ impl App {
             txn_rows: vec![],
             txn_scroll: 0,
             txn_status: String::new(),
+            cat_rows: vec![],
+            cat_scroll: 0,
+            cat_status: String::new(),
+            cat_mode: CategoryMode::Browse,
+            cat_name: String::new(),
+            cat_selected: None,
         }
     }
 }
@@ -270,6 +300,12 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
         KeyCode::Char('2') => app.active_tab = 1,
         KeyCode::Char('3') => app.active_tab = 2,
         KeyCode::Char('4') => app.active_tab = 3,
+        KeyCode::Char('5') => {
+            app.active_tab = 4;
+            if app.cat_rows.is_empty() {
+                fetch_categories(app).await?;
+            }
+        }
         KeyCode::Tab => {
             if app.input_mode == InputMode::Normal {
                 app.input_mode = InputMode::Editing;
@@ -303,6 +339,10 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
         }
         KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
+            if app.active_tab == 4 {
+                app.cat_mode = CategoryMode::Browse;
+                app.cat_name.clear();
+            }
         }
         KeyCode::Enter => match app.active_tab {
             0 => {
@@ -321,16 +361,43 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
             3 => {
                 fetch_transactions(app).await?;
             }
+            4 => match app.cat_mode.clone() {
+                CategoryMode::Browse => {
+                    if let Some(id) = app.cat_selected {
+                        if let Some(cat) = app.cat_rows.iter().find(|c| c.id == id) {
+                            app.cat_name = cat.name.clone();
+                            app.cat_mode = CategoryMode::Edit(id);
+                        }
+                    } else if app.cat_rows.is_empty() {
+                        fetch_categories(app).await?;
+                    }
+                }
+                CategoryMode::Create => {
+                    create_category(app).await?;
+                }
+                CategoryMode::Edit(_) => {
+                    update_category(app).await?;
+                }
+                CategoryMode::DeleteConfirm(_id, _name) => {
+                    delete_category(app).await?;
+                }
+            },
             _ => {}
         },
         KeyCode::Up => {
             if app.active_tab == 3 && app.txn_scroll > 0 {
                 app.txn_scroll -= 1;
             }
+            if app.active_tab == 4 && app.cat_scroll > 0 {
+                app.cat_scroll -= 1;
+            }
         }
         KeyCode::Down => {
             if app.active_tab == 3 {
                 app.txn_scroll += 1;
+            }
+            if app.active_tab == 4 {
+                app.cat_scroll += 1;
             }
         }
         KeyCode::Char(c) => {
@@ -355,6 +422,23 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                     c,
                 ),
                 2 => app.ck_sku.push(c),
+                4 => match app.cat_mode {
+                    CategoryMode::Create | CategoryMode::Edit(_) => {
+                        app.cat_name.push(c);
+                    }
+                    _ => {
+                        if c == 'n' {
+                            app.cat_mode = CategoryMode::Create;
+                            app.cat_name.clear();
+                        } else if c == 'd' {
+                            if let Some(id) = app.cat_selected {
+                                if let Some(cat) = app.cat_rows.iter().find(|r| r.id == id) {
+                                    app.cat_mode = CategoryMode::DeleteConfirm(id, cat.name.clone());
+                                }
+                            }
+                        }
+                    }
+                },
                 _ => {}
             }
         }
@@ -375,6 +459,9 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
             ),
             2 => {
                 app.ck_sku.pop();
+            }
+            4 => {
+                app.cat_name.pop();
             }
             _ => {}
         },
@@ -562,6 +649,123 @@ async fn fetch_transactions(app: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn fetch_categories(app: &mut App) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let res = client
+        .get(format!("{}/categories", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            match r.json::<Vec<CategoryRow>>().await {
+                Ok(rows) => {
+                    app.cat_rows = rows;
+                    app.cat_scroll = 0;
+                    app.cat_status = format!("{} categories", app.cat_rows.len());
+                }
+                Err(e) => app.cat_status = format!("Parse err: {e}"),
+            }
+        }
+        Ok(r) => app.cat_status = format!("HTTP {}", r.status()),
+        Err(e) => app.cat_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
+async fn create_category(app: &mut App) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let name = app.cat_name.trim().to_string();
+    if name.is_empty() {
+        app.cat_status = "ERR: Name required".into();
+        return Ok(());
+    }
+    let res = client
+        .post(format!("{}/categories", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "name": name }))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            app.cat_status = "Created".into();
+            app.cat_name.clear();
+            app.cat_mode = CategoryMode::Browse;
+            fetch_categories(app).await?;
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            app.cat_status = format!("ERR: {body}");
+        }
+        Err(e) => app.cat_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
+async fn update_category(app: &mut App) -> anyhow::Result<()> {
+    let id = match app.cat_mode {
+        CategoryMode::Edit(id) => id,
+        _ => return Ok(()),
+    };
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let name = app.cat_name.trim().to_string();
+    if name.is_empty() {
+        app.cat_status = "ERR: Name required".into();
+        return Ok(());
+    }
+    let res = client
+        .put(format!("{}/categories/{id}", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "name": name }))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            app.cat_status = "Updated".into();
+            app.cat_name.clear();
+            app.cat_mode = CategoryMode::Browse;
+            fetch_categories(app).await?;
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            app.cat_status = format!("ERR: {body}");
+        }
+        Err(e) => app.cat_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
+async fn delete_category(app: &mut App) -> anyhow::Result<()> {
+    let id = match app.cat_mode {
+        CategoryMode::DeleteConfirm(id, _) => id,
+        _ => return Ok(()),
+    };
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let res = client
+        .delete(format!("{}/categories/{id}", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            app.cat_status = "Deleted".into();
+            app.cat_mode = CategoryMode::Browse;
+            app.cat_selected = None;
+            fetch_categories(app).await?;
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            app.cat_status = format!("ERR: {body}");
+        }
+        Err(e) => app.cat_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
 fn ui(f: &mut Frame, app: &mut App) {
     if app.token.is_none() {
         login_ui(f, app);
@@ -693,6 +897,7 @@ fn main_ui(f: &mut Frame, app: &App) {
         1 => stock_out_ui(f, app, chunks[1]),
         2 => check_ui(f, app, chunks[1]),
         3 => transactions_ui(f, app, chunks[1]),
+        4 => categories_ui(f, app, chunks[1]),
         _ => {}
     }
 }
@@ -966,6 +1171,130 @@ fn transactions_ui(f: &mut Frame, app: &App, area: Rect) {
     .highlight_symbol(">> ");
 
     f.render_stateful_widget(table, chunks[1], &mut ratatui::widgets::TableState::new().with_offset(app.txn_scroll));
+}
+
+fn categories_ui(f: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+
+    // Status line
+    let status_style = if app.cat_status.starts_with("ERR") {
+        Style::default().fg(Color::Red)
+    } else if !app.cat_status.is_empty() {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default()
+    };
+    f.render_widget(Paragraph::new(app.cat_status.as_str()).style(status_style), chunks[0]);
+
+    match app.cat_mode {
+        CategoryMode::Browse => {
+            if app.cat_rows.is_empty() {
+                f.render_widget(
+                    Paragraph::new("Press Enter or [5] to load categories\n\nn = new  |  Enter = edit  |  d = delete  |  ↑↓ = scroll")
+                        .style(Style::default().fg(Color::DarkGray))
+                        .alignment(Alignment::Center),
+                    chunks[1],
+                );
+                return;
+            }
+
+            let header_cells = ["ID", "Name", "Slug"]
+                .iter()
+                .map(|h| Cell::from(*h).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+            let header = Row::new(header_cells).height(1).bottom_margin(1);
+
+            let rows: Vec<Row> = app.cat_rows.iter().map(|c| {
+                Row::new(vec![
+                    Cell::from(c.id.to_string()),
+                    Cell::from(c.name.as_str()),
+                    Cell::from(c.slug.as_str()),
+                ])
+            }).collect();
+
+            let table = Table::new(
+                rows,
+                [
+                    Constraint::Length(6),
+                    Constraint::Length(20),
+                    Constraint::Length(20),
+                ],
+            )
+            .header(header)
+            .block(Block::default().title(" Categories ").borders(Borders::ALL))
+            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .highlight_symbol(">> ");
+
+            f.render_stateful_widget(
+                table,
+                chunks[1],
+                &mut ratatui::widgets::TableState::new().with_offset(app.cat_scroll),
+            );
+        }
+        CategoryMode::Create | CategoryMode::Edit(_) => {
+            let is_edit = matches!(app.cat_mode, CategoryMode::Edit(_));
+
+            let form_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                ])
+                .split(chunks[1]);
+
+            let name_block = Block::default()
+                .title(" Name ")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Yellow));
+            f.render_widget(Paragraph::new(app.cat_name.as_str()).block(name_block), form_chunks[0]);
+
+            let btn_style = Style::default()
+                .fg(Color::Black)
+                .bg(if is_edit { Color::Blue } else { Color::Green })
+                .add_modifier(Modifier::BOLD);
+            let btn = Paragraph::new(if is_edit { "[ Update ]" } else { "[ Create ]" })
+                .block(Block::default().borders(Borders::ALL))
+                .style(btn_style)
+                .alignment(Alignment::Center);
+            f.render_widget(btn, form_chunks[1]);
+
+            f.render_widget(
+                Paragraph::new("Enter: submit  |  Esc: back").style(Style::default().fg(Color::DarkGray)).alignment(Alignment::Center),
+                form_chunks[2],
+            );
+        }
+        CategoryMode::DeleteConfirm(_, ref name) => {
+            let popup = centered_rect(40, 20, chunks[1]);
+            f.render_widget(Clear, popup);
+
+            let inner = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([Constraint::Min(0), Constraint::Length(3)])
+                .split(popup);
+
+            let msg = format!(" Delete category \"{name}\"?\n\n This will fail if products still reference it.");
+            f.render_widget(
+                Paragraph::new(msg.as_str())
+                    .block(Block::default().title(" Confirm Delete ").borders(Borders::ALL))
+                    .style(Style::default().fg(Color::Red))
+                    .alignment(Alignment::Center),
+                inner[0],
+            );
+
+            f.render_widget(
+                Paragraph::new("Enter: confirm  |  Esc: cancel")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Center),
+                inner[1],
+            );
+        }
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
