@@ -4,7 +4,7 @@ Terminal-based warehouse management for Salad Buah ERP. Keyboard-driven, runs on
 
 ```
 ┌─ Duwet ───────────────────────────────────────────┐
-│ Stock In [0] | Stock Out [1] | Check [2]           │
+| Stock In [0] | Stock Out [1] | Check [2] | Transactions [3]
 │────────────────────────────────────────────────────│
 │ ┌─ SKU ────────┐  ┌─ Quantity ──┐  ┌─ Warehouse ┐ │
 │ │ PRD-001      │  │ 10          │  │ 1          │ │
@@ -31,7 +31,8 @@ Duwet TUI ──Login──→ Salak (:8000) POST /auth/login → Mangosteen
     │
     ├─ Stock In ──→ Salak (:8000) POST /stock-in
     ├─ Stock Out ─→ Salak (:8000) POST /stock-out
-    └─ Check ────→ Salak (:8000) GET /inventory?sku=X
+    ├─ Check ────→ Salak (:8000) GET /inventory?sku=X
+    └─ Transactions → Salak (:8000) GET /inventory/transactions
 ```
 
 ## Quick Start
@@ -82,9 +83,10 @@ SALAK_URL=http://192.168.1.10:8000
 |-----|--------|
 | `Tab` | Next field |
 | `Shift+Tab` | Previous field |
-| `Enter` | Submit form |
+| `Enter` | Submit / Fetch |
 | `Esc` | Clear / Normal mode |
-| `1/2/3` | Switch tab |
+| `1/2/3/4` | Switch tab |
+| `↑/↓` | Scroll table (Transactions) |
 | Type | Input text |
 
 ## Tabs
@@ -101,6 +103,12 @@ SALAK_URL=http://192.168.1.10:8000
 - SKU lookup
 - GET Salak `/inventory?sku=X`
 - Shows product ID, name, current stock
+
+### Transactions (4)
+- Read-only transaction history
+- GET Salak `/inventory/transactions?limit=50`
+- Table: Time | SKU | Delta (color-coded) | Reference | Warehouse
+- `↑/↓` to scroll, Enter to refresh
 
 ## License
 

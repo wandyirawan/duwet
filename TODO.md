@@ -12,7 +12,7 @@ All Salak endpoints accessible from Duwet TUI. Full CRUD for warehouse operators
 [3] Products     — GET /products (table)        🆕
 [4] Categories   — GET /categories (table)      🆕
 [5] Warehouses   — GET /warehouses (table)      🆕
-[6] Transactions — GET /inventory/transactions  🆕
+[6] Transactions — GET /inventory/transactions  ✅ done ✅
 ```
 
 ## Per-tab details
@@ -35,10 +35,11 @@ All Salak endpoints accessible from Duwet TUI. Full CRUD for warehouse operators
 - `n` → new warehouse
 - Enter → edit
 
-### [6] Transactions — Table (read-only)
+### [6] Transactions — Table (read-only) ✅ done
 - GET /inventory/transactions?product_id=X&limit=50
 - Table: Time | SKU | Delta | Reference | Warehouse
 - Scrollable, most recent first
+- Up/Down arrows to scroll
 
 ## Technical notes
 

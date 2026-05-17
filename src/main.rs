@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Tabs},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs},
     Frame, Terminal,
 };
 use std::io;
@@ -52,6 +52,11 @@ struct App {
 
     // Focus on CRUD screen
     input_mode: InputMode,
+
+    // Transactions
+    txn_rows: Vec<TransactionRow>,
+    txn_scroll: usize,
+    txn_status: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +89,20 @@ struct InventoryResult {
     real_qty: i32,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
+struct TransactionRow {
+    id: i32,
+    product_id: i32,
+    warehouse_id: i32,
+    delta_qty: serde_json::Number,
+    reference_id: Option<String>,
+    notes: Option<String>,
+    created_at: String,
+    product_name: Option<String>,
+    sku: Option<String>,
+}
+
 impl App {
     fn new() -> Self {
         Self {
@@ -92,7 +111,7 @@ impl App {
             login_password: String::new(),
             login_error: String::new(),
             login_focus: LoginFocus::Email,
-            tabs: vec!["Stock In", "Stock Out", "Check"],
+            tabs: vec!["Stock In", "Stock Out", "Check", "Transactions"],
             active_tab: 0,
             si_sku: String::new(),
             si_qty: String::new(),
@@ -109,6 +128,9 @@ impl App {
             ck_sku: String::new(),
             ck_result: None,
             input_mode: InputMode::Normal,
+            txn_rows: vec![],
+            txn_scroll: 0,
+            txn_status: String::new(),
         }
     }
 }
@@ -247,6 +269,7 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
         KeyCode::Char('1') => app.active_tab = 0,
         KeyCode::Char('2') => app.active_tab = 1,
         KeyCode::Char('3') => app.active_tab = 2,
+        KeyCode::Char('4') => app.active_tab = 3,
         KeyCode::Tab => {
             if app.input_mode == InputMode::Normal {
                 app.input_mode = InputMode::Editing;
@@ -295,8 +318,21 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
             2 => {
                 check_inventory(app).await?;
             }
+            3 => {
+                fetch_transactions(app).await?;
+            }
             _ => {}
         },
+        KeyCode::Up => {
+            if app.active_tab == 3 && app.txn_scroll > 0 {
+                app.txn_scroll -= 1;
+            }
+        }
+        KeyCode::Down => {
+            if app.active_tab == 3 {
+                app.txn_scroll += 1;
+            }
+        }
         KeyCode::Char(c) => {
             if app.input_mode == InputMode::Normal {
                 app.input_mode = InputMode::Editing;
@@ -496,6 +532,36 @@ async fn check_inventory(app: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn fetch_transactions(app: &mut App) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+
+    let url = format!("{}/inventory/transactions?limit=50", salak_url());
+    let res = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await;
+
+    match res {
+        Ok(r) if r.status().is_success() => {
+            match r.json::<Vec<TransactionRow>>().await {
+                Ok(rows) => {
+                    app.txn_rows = rows;
+                    app.txn_scroll = 0;
+                    app.txn_status = format!("{} transactions", app.txn_rows.len());
+                }
+                Err(e) => app.txn_status = format!("Parse err: {e}"),
+            }
+        }
+        Ok(r) => {
+            app.txn_status = format!("HTTP {}", r.status());
+        }
+        Err(e) => app.txn_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
 fn ui(f: &mut Frame, app: &mut App) {
     if app.token.is_none() {
         login_ui(f, app);
@@ -626,6 +692,7 @@ fn main_ui(f: &mut Frame, app: &App) {
         0 => stock_in_ui(f, app, chunks[1]),
         1 => stock_out_ui(f, app, chunks[1]),
         2 => check_ui(f, app, chunks[1]),
+        3 => transactions_ui(f, app, chunks[1]),
         _ => {}
     }
 }
@@ -820,6 +887,85 @@ fn check_ui(f: &mut Frame, app: &App, area: Rect) {
             chunks[1],
         );
     }
+}
+
+fn transactions_ui(f: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+
+    // Status line
+    let status_style = if app.txn_status.starts_with("ERR") {
+        Style::default().fg(Color::Red)
+    } else if !app.txn_status.is_empty() {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(app.txn_status.as_str())
+            .style(status_style),
+        chunks[0],
+    );
+
+    if app.txn_rows.is_empty() {
+        f.render_widget(
+            Paragraph::new("Press Enter to load transactions")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center),
+            chunks[1],
+        );
+        return;
+    }
+
+    // Build table rows
+    let header_cells = ["Time", "SKU", "Delta", "Ref", "WH"]
+        .iter()
+        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+    let header = Row::new(header_cells).height(1).bottom_margin(1);
+
+    let rows: Vec<Row> = app
+        .txn_rows
+        .iter()
+        .map(|t| {
+            let time = &t.created_at[..19]; // truncate ISO to YYYY-MM-DD HH:MM:SS
+            let sku = t.sku.as_deref().unwrap_or("-");
+            let delta = &t.delta_qty;
+            let ref_id = t.reference_id.as_deref().unwrap_or("-");
+            let wh = t.warehouse_id.to_string();
+            let delta_style = if delta.as_f64().unwrap_or(0.0) >= 0.0 {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Red)
+            };
+            Row::new(vec![
+                Cell::from(time),
+                Cell::from(sku),
+                Cell::from(delta.to_string()).style(delta_style),
+                Cell::from(ref_id),
+                Cell::from(wh),
+            ])
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(20),
+            Constraint::Length(15),
+            Constraint::Length(8),
+            Constraint::Length(15),
+            Constraint::Length(6),
+        ],
+    )
+    .header(header)
+    .block(Block::default().title(" Transactions ").borders(Borders::ALL))
+    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+    .highlight_symbol(">> ");
+
+    f.render_stateful_widget(table, chunks[1], &mut ratatui::widgets::TableState::new().with_offset(app.txn_scroll));
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
