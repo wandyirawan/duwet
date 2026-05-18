@@ -81,6 +81,8 @@ struct App {
     pr_scroll: usize,
     pr_status: String,
     pr_search: String,
+    pr_mode: PrMode,
+    pr_selected: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -176,6 +178,13 @@ struct ProductRow {
     is_active: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum PrMode {
+    Browse,
+    Detail,
+    DeleteConfirm(i32, String),
+}
+
 impl App {
     fn new() -> Self {
         Self {
@@ -222,6 +231,8 @@ impl App {
             pr_scroll: 0,
             pr_status: String::new(),
             pr_search: String::new(),
+            pr_mode: PrMode::Browse,
+            pr_selected: None,
         }
     }
 }
@@ -435,6 +446,9 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                 app.wh_name.clear();
                 app.wh_location.clear();
             }
+            if app.active_tab == 6 {
+                app.pr_mode = PrMode::Browse;
+            }
         }
         KeyCode::Enter => match app.active_tab {
             0 => {
@@ -497,7 +511,19 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                 }
             },
             6 => {
-                search_products(app).await?;
+                match app.pr_mode {
+                    PrMode::Browse => {
+                        if app.pr_rows.is_empty() {
+                            search_products(app).await?;
+                        } else if app.pr_selected.is_some() {
+                            app.pr_mode = PrMode::Detail;
+                        }
+                    }
+                    PrMode::DeleteConfirm(_, _) => {
+                        delete_product(app).await?;
+                    }
+                    _ => {}
+                }
             }
             _ => {}
         },
@@ -589,7 +615,22 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                         }
                     }
                 },
-                6 => app.pr_search.push(c),
+                6 => {
+                    match app.pr_mode {
+                        PrMode::Browse => {
+                            if c == 'd' {
+                                if let Some(id) = app.pr_selected {
+                                    if let Some(pr) = app.pr_rows.iter().find(|r| r.id == id) {
+                                        app.pr_mode = PrMode::DeleteConfirm(id, pr.name.clone());
+                                    }
+                                }
+                            } else {
+                                app.pr_search.push(c);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
@@ -1090,6 +1131,34 @@ fn urlencoding(s: &str) -> String {
             _ => format!("%{:02X}", c as u8),
         })
         .collect()
+}
+
+async fn delete_product(app: &mut App) -> anyhow::Result<()> {
+    let id = match app.pr_mode {
+        PrMode::DeleteConfirm(id, _) => id,
+        _ => return Ok(()),
+    };
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let res = client
+        .delete(format!("{}/products/{id}", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            app.pr_status = "Deleted".into();
+            app.pr_mode = PrMode::Browse;
+            app.pr_selected = None;
+            search_products(app).await?;
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            app.pr_status = format!("ERR: {body}");
+        }
+        Err(e) => app.pr_status = format!("ERR: {e}"),
+    }
+    Ok(())
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -1761,14 +1830,12 @@ fn products_ui(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Length(3), Constraint::Length(1), Constraint::Min(0)])
         .split(area);
 
-    // Search bar
     let search_block = Block::default()
         .title(" Search ")
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::Yellow));
     f.render_widget(Paragraph::new(app.pr_search.as_str()).block(search_block), chunks[0]);
 
-    // Status
     let status_style = if app.pr_status.starts_with("ERR") {
         Style::default().fg(Color::Red)
     } else if !app.pr_status.is_empty() {
@@ -1776,59 +1843,95 @@ fn products_ui(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default()
     };
-    f.render_widget(
-        Paragraph::new(app.pr_status.as_str()).style(status_style),
-        chunks[1],
-    );
+    f.render_widget(Paragraph::new(app.pr_status.as_str()).style(status_style), chunks[1]);
 
-    if app.pr_rows.is_empty() && app.pr_status.is_empty() {
-        f.render_widget(
-            Paragraph::new("Type search term and press Enter to find products\n\n↑↓ = scroll")
-                .style(Style::default().fg(Color::DarkGray))
-                .alignment(Alignment::Center),
-            chunks[2],
-        );
-        return;
+    match app.pr_mode {
+        PrMode::Browse => {
+            if app.pr_rows.is_empty() && app.pr_status.is_empty() {
+                f.render_widget(
+                    Paragraph::new("Type search term and press Enter to find products\n\n↑↓ = scroll  |  Enter = detail  |  d = delete")
+                        .style(Style::default().fg(Color::DarkGray)).alignment(Alignment::Center),
+                    chunks[2],
+                );
+                return;
+            }
+            if app.pr_rows.is_empty() { return; }
+
+            let header = Row::new(
+                ["SKU", "Name", "Price", "Category", "Active"]
+                    .iter().map(|h| Cell::from(*h).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+            ).height(1).bottom_margin(1);
+
+            let rows: Vec<Row> = app.pr_rows.iter().map(|p| {
+                let active_style = if p.is_active {
+                    Style::default().fg(Color::Green)
+                } else { Style::default().fg(Color::DarkGray) };
+                Row::new(vec![
+                    Cell::from(p.sku.as_str()),
+                    Cell::from(p.name.as_str()),
+                    Cell::from(format!("{}", p.price)),
+                    Cell::from(p.category_name.as_deref().unwrap_or("-")),
+                    Cell::from(if p.is_active { "✓" } else { "✗" }).style(active_style),
+                ])
+            }).collect();
+
+            let table = Table::new(rows, [
+                Constraint::Length(15), Constraint::Length(20),
+                Constraint::Length(10), Constraint::Length(15), Constraint::Length(8),
+            ])
+            .header(header)
+            .block(Block::default().title(" Products ").borders(Borders::ALL))
+            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .highlight_symbol(">> ");
+
+            f.render_stateful_widget(table, chunks[2],
+                &mut ratatui::widgets::TableState::new().with_offset(app.pr_scroll));
+        }
+        PrMode::Detail => {
+            if let Some(id) = app.pr_selected {
+                if let Some(p) = app.pr_rows.iter().find(|r| r.id == id) {
+                    let popup = centered_rect(50, 40, chunks[2]);
+                    f.render_widget(Clear, popup);
+                    let lines = vec![
+                        Line::from(format!("  SKU        : {}", p.sku)),
+                        Line::from(format!("  Name       : {}", p.name)),
+                        Line::from(format!("  Price      : {}", p.price)),
+                        Line::from(format!("  Cost Price : (not loaded)")),
+                        Line::from(format!("  Category   : {}", p.category_name.as_deref().unwrap_or("-"))),
+                        Line::from(format!("  Active     : {}", if p.is_active { "Yes" } else { "No" })),
+                        Line::from(""),
+                        Line::from(Span::styled("  Esc to close", Style::default().fg(Color::DarkGray))),
+                    ];
+                    f.render_widget(
+                        Paragraph::new(Text::from(lines))
+                            .block(Block::default().title(" Product Detail ").borders(Borders::ALL))
+                            .style(Style::default()),
+                        popup,
+                    );
+                }
+            }
+        }
+        PrMode::DeleteConfirm(_, ref name) => {
+            let popup = centered_rect(40, 20, chunks[2]);
+            f.render_widget(Clear, popup);
+            let inner = Layout::default()
+                .direction(Direction::Vertical).margin(1)
+                .constraints([Constraint::Min(0), Constraint::Length(3)])
+                .split(popup);
+            let msg = format!(" Delete product \"{name}\"?\n\n This will fail if inventory/transactions still reference it.");
+            f.render_widget(
+                Paragraph::new(msg.as_str())
+                    .block(Block::default().title(" Confirm Delete ").borders(Borders::ALL))
+                    .style(Style::default().fg(Color::Red)).alignment(Alignment::Center),
+                inner[0],
+            );
+            f.render_widget(
+                Paragraph::new("Enter: confirm  |  Esc: cancel")
+                    .style(Style::default().fg(Color::DarkGray)).alignment(Alignment::Center),
+                inner[1],
+            );
+        }
     }
-
-    if app.pr_rows.is_empty() {
-        return;
-    }
-
-    let header = Row::new(
-        ["SKU", "Name", "Price", "Category", "Active"]
-            .iter().map(|h| Cell::from(*h).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
-    ).height(1).bottom_margin(1);
-
-    let rows: Vec<Row> = app.pr_rows.iter().map(|p| {
-        let active_style = if p.is_active {
-            Style::default().fg(Color::Green)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        Row::new(vec![
-            Cell::from(p.sku.as_str()),
-            Cell::from(p.name.as_str()),
-            Cell::from(format!("{}", p.price)),
-            Cell::from(p.category_name.as_deref().unwrap_or("-")),
-            Cell::from(if p.is_active { "✓" } else { "✗" }).style(active_style),
-        ])
-    }).collect();
-
-    let table = Table::new(rows, [
-        Constraint::Length(15),
-        Constraint::Length(20),
-        Constraint::Length(10),
-        Constraint::Length(15),
-        Constraint::Length(8),
-    ])
-    .header(header)
-    .block(Block::default().title(" Products ").borders(Borders::ALL))
-    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-    .highlight_symbol(">> ");
-
-    f.render_stateful_widget(table, chunks[2],
-        &mut ratatui::widgets::TableState::new().with_offset(app.pr_scroll));
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
