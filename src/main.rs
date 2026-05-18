@@ -65,6 +65,16 @@ struct App {
     cat_mode: CategoryMode,
     cat_name: String,
     cat_selected: Option<i32>,
+
+    // Warehouses
+    wh_rows: Vec<WarehouseRow>,
+    wh_scroll: usize,
+    wh_status: String,
+    wh_mode: WhMode,
+    wh_name: String,
+    wh_location: String,
+    wh_focus: WhFormFocus,
+    wh_selected: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,6 +137,28 @@ enum CategoryMode {
     DeleteConfirm(i32, String),
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
+struct WarehouseRow {
+    id: i32,
+    name: String,
+    location: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum WhFormFocus {
+    Name,
+    Location,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum WhMode {
+    Browse,
+    Create,
+    Edit(i32),
+    DeleteConfirm(i32, String),
+}
+
 impl App {
     fn new() -> Self {
         Self {
@@ -135,7 +167,7 @@ impl App {
             login_password: String::new(),
             login_error: String::new(),
             login_focus: LoginFocus::Email,
-            tabs: vec!["Stock In", "Stock Out", "Check", "Transactions", "Categories"],
+            tabs: vec!["Stock In", "Stock Out", "Check", "Transactions", "Categories", "Warehouses"],
             active_tab: 0,
             si_sku: String::new(),
             si_qty: String::new(),
@@ -161,6 +193,14 @@ impl App {
             cat_mode: CategoryMode::Browse,
             cat_name: String::new(),
             cat_selected: None,
+            wh_rows: vec![],
+            wh_scroll: 0,
+            wh_status: String::new(),
+            wh_mode: WhMode::Browse,
+            wh_name: String::new(),
+            wh_location: String::new(),
+            wh_focus: WhFormFocus::Name,
+            wh_selected: None,
         }
     }
 }
@@ -306,9 +346,22 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                 fetch_categories(app).await?;
             }
         }
+        KeyCode::Char('6') => {
+            app.active_tab = 5;
+            if app.wh_rows.is_empty() {
+                fetch_warehouses(app).await?;
+            }
+        }
         KeyCode::Tab => {
             if app.input_mode == InputMode::Normal {
                 app.input_mode = InputMode::Editing;
+            }
+            if app.active_tab == 5 {
+                app.wh_focus = match app.wh_focus {
+                    WhFormFocus::Name => WhFormFocus::Location,
+                    WhFormFocus::Location => WhFormFocus::Name,
+                };
+                return Ok(());
             }
             let focus = match app.active_tab {
                 0 => &mut app.si_focus,
@@ -324,6 +377,13 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
             };
         }
         KeyCode::BackTab => {
+            if app.active_tab == 5 {
+                app.wh_focus = match app.wh_focus {
+                    WhFormFocus::Name => WhFormFocus::Location,
+                    WhFormFocus::Location => WhFormFocus::Name,
+                };
+                return Ok(());
+            }
             let focus = match app.active_tab {
                 0 => &mut app.si_focus,
                 1 => &mut app.so_focus,
@@ -343,6 +403,11 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                 app.cat_mode = CategoryMode::Browse;
                 app.cat_name.clear();
             }
+            if app.active_tab == 5 {
+                app.wh_mode = WhMode::Browse;
+                app.wh_name.clear();
+                app.wh_location.clear();
+            }
         }
         KeyCode::Enter => match app.active_tab {
             0 => {
@@ -360,7 +425,7 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
             }
             3 => {
                 fetch_transactions(app).await?;
-            }
+            },
             4 => match app.cat_mode.clone() {
                 CategoryMode::Browse => {
                     if let Some(id) = app.cat_selected {
@@ -382,6 +447,28 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                     delete_category(app).await?;
                 }
             },
+            5 => match app.wh_mode.clone() {
+                WhMode::Browse => {
+                    if let Some(id) = app.wh_selected {
+                        if let Some(wh) = app.wh_rows.iter().find(|w| w.id == id) {
+                            app.wh_name = wh.name.clone();
+                            app.wh_location = wh.location.clone().unwrap_or_default();
+                            app.wh_mode = WhMode::Edit(id);
+                        }
+                    } else if app.wh_rows.is_empty() {
+                        fetch_warehouses(app).await?;
+                    }
+                }
+                WhMode::Create => {
+                    create_warehouse(app).await?;
+                }
+                WhMode::Edit(_) => {
+                    update_warehouse(app).await?;
+                }
+                WhMode::DeleteConfirm(_id, _name) => {
+                    delete_warehouse(app).await?;
+                }
+            },
             _ => {}
         },
         KeyCode::Up => {
@@ -391,6 +478,9 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
             if app.active_tab == 4 && app.cat_scroll > 0 {
                 app.cat_scroll -= 1;
             }
+            if app.active_tab == 5 && app.wh_scroll > 0 {
+                app.wh_scroll -= 1;
+            }
         }
         KeyCode::Down => {
             if app.active_tab == 3 {
@@ -398,6 +488,9 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
             }
             if app.active_tab == 4 {
                 app.cat_scroll += 1;
+            }
+            if app.active_tab == 5 {
+                app.wh_scroll += 1;
             }
         }
         KeyCode::Char(c) => {
@@ -439,6 +532,27 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                         }
                     }
                 },
+                5 => match app.wh_mode {
+                    WhMode::Create | WhMode::Edit(_) => {
+                        match app.wh_focus {
+                            WhFormFocus::Name => app.wh_name.push(c),
+                            WhFormFocus::Location => app.wh_location.push(c),
+                        }
+                    }
+                    _ => {
+                        if c == 'n' {
+                            app.wh_mode = WhMode::Create;
+                            app.wh_name.clear();
+                            app.wh_location.clear();
+                        } else if c == 'd' {
+                            if let Some(id) = app.wh_selected {
+                                if let Some(wh) = app.wh_rows.iter().find(|r| r.id == id) {
+                                    app.wh_mode = WhMode::DeleteConfirm(id, wh.name.clone());
+                                }
+                            }
+                        }
+                    }
+                },
                 _ => {}
             }
         }
@@ -462,6 +576,12 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
             }
             4 => {
                 app.cat_name.pop();
+            }
+            5 => {
+                match app.wh_focus {
+                    WhFormFocus::Name => app.wh_name.pop(),
+                    WhFormFocus::Location => app.wh_location.pop(),
+                };
             }
             _ => {}
         },
@@ -766,6 +886,131 @@ async fn delete_category(app: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn fetch_warehouses(app: &mut App) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let res = client
+        .get(format!("{}/warehouses", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            match r.json::<Vec<WarehouseRow>>().await {
+                Ok(rows) => {
+                    app.wh_rows = rows;
+                    app.wh_scroll = 0;
+                    app.wh_status = format!("{} warehouses", app.wh_rows.len());
+                }
+                Err(e) => app.wh_status = format!("Parse err: {e}"),
+            }
+        }
+        Ok(r) => app.wh_status = format!("HTTP {}", r.status()),
+        Err(e) => app.wh_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
+async fn create_warehouse(app: &mut App) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let name = app.wh_name.trim().to_string();
+    if name.is_empty() {
+        app.wh_status = "ERR: Name required".into();
+        return Ok(());
+    }
+    let res = client
+        .post(format!("{}/warehouses", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "name": name,
+            "location": app.wh_location.trim(),
+        }))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            app.wh_status = "Created".into();
+            app.wh_name.clear();
+            app.wh_location.clear();
+            app.wh_mode = WhMode::Browse;
+            fetch_warehouses(app).await?;
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            app.wh_status = format!("ERR: {body}");
+        }
+        Err(e) => app.wh_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
+async fn update_warehouse(app: &mut App) -> anyhow::Result<()> {
+    let id = match app.wh_mode {
+        WhMode::Edit(id) => id,
+        _ => return Ok(()),
+    };
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let name = app.wh_name.trim().to_string();
+    if name.is_empty() {
+        app.wh_status = "ERR: Name required".into();
+        return Ok(());
+    }
+    let res = client
+        .put(format!("{}/warehouses/{id}", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "name": name,
+            "location": app.wh_location.trim(),
+        }))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            app.wh_status = "Updated".into();
+            app.wh_name.clear();
+            app.wh_location.clear();
+            app.wh_mode = WhMode::Browse;
+            fetch_warehouses(app).await?;
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            app.wh_status = format!("ERR: {body}");
+        }
+        Err(e) => app.wh_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
+async fn delete_warehouse(app: &mut App) -> anyhow::Result<()> {
+    let id = match app.wh_mode {
+        WhMode::DeleteConfirm(id, _) => id,
+        _ => return Ok(()),
+    };
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let res = client
+        .delete(format!("{}/warehouses/{id}", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            app.wh_status = "Deleted".into();
+            app.wh_mode = WhMode::Browse;
+            app.wh_selected = None;
+            fetch_warehouses(app).await?;
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            app.wh_status = format!("ERR: {body}");
+        }
+        Err(e) => app.wh_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
 fn ui(f: &mut Frame, app: &mut App) {
     if app.token.is_none() {
         login_ui(f, app);
@@ -898,6 +1143,7 @@ fn main_ui(f: &mut Frame, app: &App) {
         2 => check_ui(f, app, chunks[1]),
         3 => transactions_ui(f, app, chunks[1]),
         4 => categories_ui(f, app, chunks[1]),
+        5 => warehouses_ui(f, app, chunks[1]),
         _ => {}
     }
 }
@@ -1291,6 +1537,135 @@ fn categories_ui(f: &mut Frame, app: &App, area: Rect) {
                 Paragraph::new("Enter: confirm  |  Esc: cancel")
                     .style(Style::default().fg(Color::DarkGray))
                     .alignment(Alignment::Center),
+                inner[1],
+            );
+        }
+    }
+}
+
+fn warehouses_ui(f: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+
+    let status_style = if app.wh_status.starts_with("ERR") {
+        Style::default().fg(Color::Red)
+    } else if !app.wh_status.is_empty() {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default()
+    };
+    f.render_widget(Paragraph::new(app.wh_status.as_str()).style(status_style), chunks[0]);
+
+    match app.wh_mode {
+        WhMode::Browse => {
+            if app.wh_rows.is_empty() {
+                f.render_widget(
+                    Paragraph::new("Press Enter or [6] to load warehouses\n\nn = new  |  Enter = edit  |  d = delete  |  ↑↓ = scroll\nTab = switch field")
+                        .style(Style::default().fg(Color::DarkGray))
+                        .alignment(Alignment::Center),
+                    chunks[1],
+                );
+                return;
+            }
+
+            let header = Row::new(
+                ["ID", "Name", "Location"]
+                    .iter().map(|h| Cell::from(*h).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+            ).height(1).bottom_margin(1);
+
+            let rows: Vec<Row> = app.wh_rows.iter().map(|w| {
+                Row::new(vec![
+                    Cell::from(w.id.to_string()),
+                    Cell::from(w.name.as_str()),
+                    Cell::from(w.location.as_deref().unwrap_or("-")),
+                ])
+            }).collect();
+
+            let table = Table::new(rows, [
+                Constraint::Length(6),
+                Constraint::Length(20),
+                Constraint::Length(20),
+            ])
+            .header(header)
+            .block(Block::default().title(" Warehouses ").borders(Borders::ALL))
+            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .highlight_symbol(">> ");
+
+            f.render_stateful_widget(table, chunks[1],
+                &mut ratatui::widgets::TableState::new().with_offset(app.wh_scroll));
+        }
+        WhMode::Create | WhMode::Edit(_) => {
+            let is_edit = matches!(app.wh_mode, WhMode::Edit(_));
+
+            let form_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                ])
+                .split(chunks[1]);
+
+            let name_style = if matches!(app.wh_focus, WhFormFocus::Name) {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else { Style::default() };
+            f.render_widget(
+                Paragraph::new(app.wh_name.as_str())
+                    .block(Block::default().title(" Name ").borders(Borders::ALL).style(name_style)),
+                form_chunks[0],
+            );
+
+            let loc_style = if matches!(app.wh_focus, WhFormFocus::Location) {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else { Style::default() };
+            f.render_widget(
+                Paragraph::new(app.wh_location.as_str())
+                    .block(Block::default().title(" Location ").borders(Borders::ALL).style(loc_style)),
+                form_chunks[1],
+            );
+
+            let btn_style = Style::default().fg(Color::Black)
+                .bg(if is_edit { Color::Blue } else { Color::Green })
+                .add_modifier(Modifier::BOLD);
+            f.render_widget(
+                Paragraph::new(if is_edit { "[ Update ]" } else { "[ Create ]" })
+                    .block(Block::default().borders(Borders::ALL))
+                    .style(btn_style).alignment(Alignment::Center),
+                form_chunks[2],
+            );
+
+            f.render_widget(
+                Paragraph::new("Tab: next field  |  Enter: submit  |  Esc: back")
+                    .style(Style::default().fg(Color::DarkGray)).alignment(Alignment::Center),
+                form_chunks[3],
+            );
+        }
+        WhMode::DeleteConfirm(_, ref name) => {
+            let popup = centered_rect(40, 20, chunks[1]);
+            f.render_widget(Clear, popup);
+
+            let inner = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([Constraint::Min(0), Constraint::Length(3)])
+                .split(popup);
+
+            let msg = format!(" Delete warehouse \"{name}\"?\n\n This will fail if inventory/transactions still reference it.");
+            f.render_widget(
+                Paragraph::new(msg.as_str())
+                    .block(Block::default().title(" Confirm Delete ").borders(Borders::ALL))
+                    .style(Style::default().fg(Color::Red))
+                    .alignment(Alignment::Center),
+                inner[0],
+            );
+            f.render_widget(
+                Paragraph::new("Enter: confirm  |  Esc: cancel")
+                    .style(Style::default().fg(Color::DarkGray)).alignment(Alignment::Center),
                 inner[1],
             );
         }

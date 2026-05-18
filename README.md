@@ -119,6 +119,12 @@ SALAK_URL=http://192.168.1.10:8000
 - `n` → new, Enter → edit, `d` → delete with confirm dialog
 - Slug auto-generated from name on backend
 
+### Warehouses (6)
+- Full CRUD via Salak `/warehouses`
+- Table: ID | Name | Location
+- `n` → new, Enter → edit, `d` → delete (409 if has inventory/transactions)
+- Tab to cycle between Name & Location fields
+
 ## License
 
 MIT

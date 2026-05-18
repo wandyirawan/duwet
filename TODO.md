@@ -13,6 +13,7 @@ All Salak endpoints accessible from Duwet TUI. Full CRUD for warehouse operators
 | 2 | Check | ✅ | Existing |
 | 3 | Transactions | ✅ | Read-only table, scrollable |
 | 4 | Categories | ✅ | Full CRUD: browse/create/edit/delete |
+| 5 | Warehouses | ✅ | Full CRUD: browse/create/edit/delete, Tab field cycling |
 
 ### ✅ Salak Side (API updates)
 | Endpoint | Status |
@@ -34,11 +35,6 @@ All Salak endpoints accessible from Duwet TUI. Full CRUD for warehouse operators
 - Search bar at top (type to filter)
 - Enter on row → detail view → Edit (PUT /products/{id})
 - `n` key → New product form (POST /products)
-
-### [5] Warehouses — Table + CRUD
-- GET /warehouses → table: ID | Name | Location
-- `n` → new warehouse
-- Enter → edit
 
 ## Technical notes
 
