@@ -83,6 +83,13 @@ struct App {
     pr_search: String,
     pr_mode: PrMode,
     pr_selected: Option<i32>,
+    pr_form_sku: String,
+    pr_form_name: String,
+    pr_form_price: String,
+    pr_form_cost: String,
+    pr_form_cat: String,
+    pr_form_desc: String,
+    pr_form_focus: PrFormFocus,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -182,7 +189,19 @@ struct ProductRow {
 enum PrMode {
     Browse,
     Detail,
+    Create,
+    Edit(i32),
     DeleteConfirm(i32, String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum PrFormFocus {
+    Sku,
+    Name,
+    Price,
+    CostPrice,
+    CategoryId,
+    Desc,
 }
 
 impl App {
@@ -233,6 +252,13 @@ impl App {
             pr_search: String::new(),
             pr_mode: PrMode::Browse,
             pr_selected: None,
+            pr_form_sku: String::new(),
+            pr_form_name: String::new(),
+            pr_form_price: String::new(),
+            pr_form_cost: String::new(),
+            pr_form_cat: String::new(),
+            pr_form_desc: String::new(),
+            pr_form_focus: PrFormFocus::Sku,
         }
     }
 }
@@ -401,6 +427,17 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                 };
                 return Ok(());
             }
+            if app.active_tab == 6 && matches!(app.pr_mode, PrMode::Create | PrMode::Edit(_)) {
+                app.pr_form_focus = match app.pr_form_focus {
+                    PrFormFocus::Sku => PrFormFocus::Name,
+                    PrFormFocus::Name => PrFormFocus::Price,
+                    PrFormFocus::Price => PrFormFocus::CostPrice,
+                    PrFormFocus::CostPrice => PrFormFocus::CategoryId,
+                    PrFormFocus::CategoryId => PrFormFocus::Desc,
+                    PrFormFocus::Desc => PrFormFocus::Sku,
+                };
+                return Ok(());
+            }
             let focus = match app.active_tab {
                 0 => &mut app.si_focus,
                 1 => &mut app.so_focus,
@@ -419,6 +456,17 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                 app.wh_focus = match app.wh_focus {
                     WhFormFocus::Name => WhFormFocus::Location,
                     WhFormFocus::Location => WhFormFocus::Name,
+                };
+                return Ok(());
+            }
+            if app.active_tab == 6 && matches!(app.pr_mode, PrMode::Create | PrMode::Edit(_)) {
+                app.pr_form_focus = match app.pr_form_focus {
+                    PrFormFocus::Sku => PrFormFocus::Desc,
+                    PrFormFocus::Name => PrFormFocus::Sku,
+                    PrFormFocus::Price => PrFormFocus::Name,
+                    PrFormFocus::CostPrice => PrFormFocus::Price,
+                    PrFormFocus::CategoryId => PrFormFocus::CostPrice,
+                    PrFormFocus::Desc => PrFormFocus::CategoryId,
                 };
                 return Ok(());
             }
@@ -448,6 +496,12 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
             }
             if app.active_tab == 6 {
                 app.pr_mode = PrMode::Browse;
+                app.pr_form_sku.clear();
+                app.pr_form_name.clear();
+                app.pr_form_price.clear();
+                app.pr_form_cost.clear();
+                app.pr_form_cat.clear();
+                app.pr_form_desc.clear();
             }
         }
         KeyCode::Enter => match app.active_tab {
@@ -511,13 +565,19 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                 }
             },
             6 => {
-                match app.pr_mode {
+                match app.pr_mode.clone() {
                     PrMode::Browse => {
                         if app.pr_rows.is_empty() {
                             search_products(app).await?;
                         } else if app.pr_selected.is_some() {
                             app.pr_mode = PrMode::Detail;
                         }
+                    }
+                    PrMode::Create => {
+                        create_product(app).await?;
+                    }
+                    PrMode::Edit(_) => {
+                        update_product(app).await?;
                     }
                     PrMode::DeleteConfirm(_, _) => {
                         delete_product(app).await?;
@@ -618,7 +678,25 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                 6 => {
                     match app.pr_mode {
                         PrMode::Browse => {
-                            if c == 'd' {
+                            if c == 'n' {
+                                app.pr_mode = PrMode::Create;
+                                app.pr_form_sku.clear();
+                                app.pr_form_name.clear();
+                                app.pr_form_price.clear();
+                                app.pr_form_cost.clear();
+                                app.pr_form_cat.clear();
+                                app.pr_form_desc.clear();
+                                app.pr_form_focus = PrFormFocus::Sku;
+                            } else if c == 'e' {
+                                if let Some(id) = app.pr_selected {
+                                    if let Some(pr) = app.pr_rows.iter().find(|r| r.id == id) {
+                                        app.pr_form_sku = pr.sku.clone();
+                                        app.pr_form_name = pr.name.clone();
+                                        app.pr_mode = PrMode::Edit(id);
+                                        app.pr_form_focus = PrFormFocus::Sku;
+                                    }
+                                }
+                            } else if c == 'd' {
                                 if let Some(id) = app.pr_selected {
                                     if let Some(pr) = app.pr_rows.iter().find(|r| r.id == id) {
                                         app.pr_mode = PrMode::DeleteConfirm(id, pr.name.clone());
@@ -626,6 +704,16 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                                 }
                             } else {
                                 app.pr_search.push(c);
+                            }
+                        }
+                        PrMode::Create | PrMode::Edit(_) => {
+                            match app.pr_form_focus {
+                                PrFormFocus::Sku => app.pr_form_sku.push(c),
+                                PrFormFocus::Name => app.pr_form_name.push(c),
+                                PrFormFocus::Price => app.pr_form_price.push(c),
+                                PrFormFocus::CostPrice => app.pr_form_cost.push(c),
+                                PrFormFocus::CategoryId => app.pr_form_cat.push(c),
+                                PrFormFocus::Desc => app.pr_form_desc.push(c),
                             }
                         }
                         _ => {}
@@ -662,7 +750,21 @@ async fn handle_main_key(app: &mut App, key: KeyCode) -> anyhow::Result<()> {
                 };
             }
             6 => {
-                app.pr_search.pop();
+                match app.pr_mode {
+                    PrMode::Create | PrMode::Edit(_) => {
+                        match app.pr_form_focus {
+                            PrFormFocus::Sku => app.pr_form_sku.pop(),
+                            PrFormFocus::Name => app.pr_form_name.pop(),
+                            PrFormFocus::Price => app.pr_form_price.pop(),
+                            PrFormFocus::CostPrice => app.pr_form_cost.pop(),
+                            PrFormFocus::CategoryId => app.pr_form_cat.pop(),
+                            PrFormFocus::Desc => app.pr_form_desc.pop(),
+                        };
+                    }
+                    _ => {
+                        app.pr_search.pop();
+                    }
+                }
             }
             _ => {}
         },
@@ -1150,6 +1252,100 @@ async fn delete_product(app: &mut App) -> anyhow::Result<()> {
             app.pr_status = "Deleted".into();
             app.pr_mode = PrMode::Browse;
             app.pr_selected = None;
+            search_products(app).await?;
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            app.pr_status = format!("ERR: {body}");
+        }
+        Err(e) => app.pr_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
+async fn create_product(app: &mut App) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let price: f64 = app.pr_form_price.parse().unwrap_or(0.0);
+    let cost_price: f64 = app.pr_form_cost.parse().unwrap_or(0.0);
+    let category_id: Option<i32> = match app.pr_form_cat.trim() {
+        "" => None,
+        s => s.parse().ok(),
+    };
+    let res = client
+        .post(format!("{}/products", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "sku": app.pr_form_sku.trim(),
+            "name": app.pr_form_name.trim(),
+            "unit": "pcs",
+            "price": price,
+            "cost_price": cost_price,
+            "category_id": category_id,
+            "description": app.pr_form_desc.trim(),
+            "is_active": true,
+        }))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            app.pr_status = "Created".into();
+            app.pr_form_sku.clear();
+            app.pr_form_name.clear();
+            app.pr_form_price.clear();
+            app.pr_form_cost.clear();
+            app.pr_form_cat.clear();
+            app.pr_form_desc.clear();
+            app.pr_mode = PrMode::Browse;
+            search_products(app).await?;
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            app.pr_status = format!("ERR: {body}");
+        }
+        Err(e) => app.pr_status = format!("ERR: {e}"),
+    }
+    Ok(())
+}
+
+async fn update_product(app: &mut App) -> anyhow::Result<()> {
+    let id = match app.pr_mode {
+        PrMode::Edit(id) => id,
+        _ => return Ok(()),
+    };
+    let client = reqwest::Client::new();
+    let token = app.token.as_deref().unwrap_or("");
+    let price: f64 = app.pr_form_price.parse().unwrap_or(0.0);
+    let cost_price: f64 = app.pr_form_cost.parse().unwrap_or(0.0);
+    let category_id: Option<i32> = match app.pr_form_cat.trim() {
+        "" => None,
+        s => s.parse().ok(),
+    };
+    let res = client
+        .put(format!("{}/products/{id}", salak_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "sku": app.pr_form_sku.trim(),
+            "name": app.pr_form_name.trim(),
+            "unit": "pcs",
+            "price": price,
+            "cost_price": cost_price,
+            "category_id": category_id,
+            "description": app.pr_form_desc.trim(),
+            "is_active": true,
+        }))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            app.pr_status = "Updated".into();
+            app.pr_form_sku.clear();
+            app.pr_form_name.clear();
+            app.pr_form_price.clear();
+            app.pr_form_cost.clear();
+            app.pr_form_cat.clear();
+            app.pr_form_desc.clear();
+            app.pr_mode = PrMode::Browse;
             search_products(app).await?;
         }
         Ok(r) => {
@@ -1849,7 +2045,7 @@ fn products_ui(f: &mut Frame, app: &App, area: Rect) {
         PrMode::Browse => {
             if app.pr_rows.is_empty() && app.pr_status.is_empty() {
                 f.render_widget(
-                    Paragraph::new("Type search term and press Enter to find products\n\n↑↓ = scroll  |  Enter = detail  |  d = delete")
+                    Paragraph::new("Type search term and press Enter to find products\n\nn = new  |  e = edit  |  ↑↓ = scroll  |  Enter = detail  |  d = delete")
                         .style(Style::default().fg(Color::DarkGray)).alignment(Alignment::Center),
                     chunks[2],
                 );
@@ -1910,6 +2106,62 @@ fn products_ui(f: &mut Frame, app: &App, area: Rect) {
                     );
                 }
             }
+        }
+        PrMode::Create | PrMode::Edit(_) => {
+            let is_edit = matches!(app.pr_mode, PrMode::Edit(_));
+
+            let form_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                ])
+                .split(chunks[2]);
+
+            let fields = [
+                ("SKU", app.pr_form_sku.as_str(), &app.pr_form_focus, PrFormFocus::Sku),
+                ("Name", app.pr_form_name.as_str(), &app.pr_form_focus, PrFormFocus::Name),
+                ("Price", app.pr_form_price.as_str(), &app.pr_form_focus, PrFormFocus::Price),
+                ("Cost Price", app.pr_form_cost.as_str(), &app.pr_form_focus, PrFormFocus::CostPrice),
+                ("Category ID", app.pr_form_cat.as_str(), &app.pr_form_focus, PrFormFocus::CategoryId),
+                ("Description", app.pr_form_desc.as_str(), &app.pr_form_focus, PrFormFocus::Desc),
+            ];
+
+            for (i, (label, value, focus, expected)) in fields.iter().enumerate() {
+                let style = if **focus == *expected {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                f.render_widget(
+                    Paragraph::new(*value)
+                        .block(Block::default().title(format!(" {label} ")).borders(Borders::ALL).style(style)),
+                    form_chunks[i],
+                );
+            }
+
+            let btn_style = Style::default().fg(Color::Black)
+                .bg(if is_edit { Color::Blue } else { Color::Green })
+                .add_modifier(Modifier::BOLD);
+            f.render_widget(
+                Paragraph::new(if is_edit { "[ Update ]" } else { "[ Create ]" })
+                    .block(Block::default().borders(Borders::ALL))
+                    .style(btn_style).alignment(Alignment::Center),
+                form_chunks[6],
+            );
+
+            f.render_widget(
+                Paragraph::new("Tab: next field  |  Enter: submit  |  Esc: back")
+                    .style(Style::default().fg(Color::DarkGray)).alignment(Alignment::Center),
+                form_chunks[7],
+            );
         }
         PrMode::DeleteConfirm(_, ref name) => {
             let popup = centered_rect(40, 20, chunks[2]);
